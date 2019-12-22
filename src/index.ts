@@ -316,15 +316,12 @@ function constConfigToParam(
 
   const output = Object.keys(configs).reduce<NonNullable<Step["constants"]>>(
     (out, key) => {
-      const config = (configs[key].configs || []).reduce(
-        (val, cfg) => {
-          if ("setValue" in cfg) {
-            val["value"] = cfg.setValue;
-          }
-          return val;
-        },
-        {} as { value?: string }
-      );
+      const config = (configs[key].configs || []).reduce((val, cfg) => {
+        if ("setValue" in cfg) {
+          val["value"] = cfg.setValue;
+        }
+        return val;
+      }, {} as { value?: string });
 
       out[key] = config;
       return out;
@@ -401,7 +398,7 @@ interface StepProto {
 
   constantConfigs?: {
     [name: string]: {
-      configs?: ({ setValue: string })[];
+      configs?: { setValue: string }[];
     };
   };
 
@@ -850,17 +847,14 @@ function mergeTrackingData(data?: Record<string, string>) {
     .split(";")
     .filter(item => item.includes("_ga") || item.includes("sjID"))
     .map(item => item.split("="))
-    .reduce(
-      (data, [key, val]) => {
-        if (key === "_ga") {
-          data["ga"] = val;
-          return data;
-        }
-        data[key] = val;
+    .reduce((data, [key, val]) => {
+      if (key === "_ga") {
+        data["ga"] = val;
         return data;
-      },
-      {} as Record<string, string>
-    );
+      }
+      data[key] = val;
+      return data;
+    }, {} as Record<string, string>);
 
   if (data === undefined) {
     return cookieData;
@@ -947,7 +941,7 @@ export class Filter extends EventEmitter {
   private joinOp: "OR" | "AND";
 
   constructor(
-    options: Record<string, string>,
+    options: Record<string, string | FilterFunc>,
     initial: string[] = [],
     multi = false,
     joinOp: "OR" | "AND" = "OR"
@@ -966,7 +960,7 @@ export class Filter extends EventEmitter {
       } else {
         this.active = this.active.filter(k => k !== key);
       }
-      this.emit(EVENT_SELECTION_UPDATED, [...this.active]);
+      this._emitSelectionUpdated();
       return;
     }
 
@@ -975,7 +969,7 @@ export class Filter extends EventEmitter {
     } else {
       this.active = [];
     }
-    this.emit(EVENT_SELECTION_UPDATED, [...this.active]);
+    this._emitSelectionUpdated();
   }
 
   isActive(key: string): boolean {
@@ -997,11 +991,19 @@ export class Filter extends EventEmitter {
 
       this.options[key] = value;
     });
-    this.emit(EVENT_OPTIONS_UPDATED, { ...this.options });
+    this._emitOptionsUpdated();
   }
 
   getOptions(): Record<string, string | FilterFunc> {
     return { ...this.options };
+  }
+
+  _emitSelectionUpdated() {
+    this.emit(EVENT_SELECTION_UPDATED, [...this.active]);
+  }
+
+  _emitOptionsUpdated() {
+    this.emit(EVENT_OPTIONS_UPDATED, { ...this.options });
   }
 
   filter(): string {
@@ -1030,6 +1032,33 @@ export class Filter extends EventEmitter {
     }
   }
 }
+
+export const CombineFilters = (
+  filters: Filter[],
+  operator: "AND" | "OR" = "AND"
+) => {
+  const opts: Record<string, string | FilterFunc> = {};
+  let count = 1;
+  let on: string[] = [];
+
+  filters.forEach(f => {
+    opts["" + count] = () => f.filter();
+    on = on.concat(["" + count]);
+    count++;
+  });
+
+  const combFilter = new Filter(opts, on, true, operator);
+  filters.forEach(f => {
+    f.on(EVENT_SELECTION_UPDATED, () => {
+      combFilter._emitSelectionUpdated();
+    });
+    f.on(EVENT_OPTIONS_UPDATED, () => {
+      combFilter._emitOptionsUpdated();
+    });
+  });
+
+  return combFilter;
+};
 
 export type ValueFunc = () => string;
 export type ValueType =
